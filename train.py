@@ -296,7 +296,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
 
-            # Warmup
+            # Warmuplr_scheduler.LambdaLR
             if ni <= nw:
                 xi = [0, nw]  # x interp
                 # compute_loss.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
