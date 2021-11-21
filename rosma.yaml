@@ -1,0 +1,6 @@
+path: /home/mfatholl@na.jnj.com/share/data/score/rosma_yolo
+train: x02_postsleeve_01/images
+val: x04_Pea_on_a_Peg_06/images
+test:
+nc: 2
+names: ['left_tool', 'right_tool']

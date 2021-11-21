@@ -30,6 +30,7 @@ from utils.general import apply_classifier, check_img_size, check_imshow, check_
 from utils.plots import Annotator, colors
 from utils.torch_utils import load_classifier, select_device, time_sync
 
+# --weights runs/tower/exp/weights/best.pt  --agnostic --source /home/mfatholl@na.jnj.com/share/data/score/rosma_yolo/imerit/x11_pea_on_a_peg_03/images --nosave  --conf-thres 0.25 --iou-thres 0.1
 
 @torch.no_grad()
 def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
