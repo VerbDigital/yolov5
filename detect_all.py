@@ -61,11 +61,12 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         ):
     all_vid_fms = '/home/mfatholl@na.jnj.com/share/data/score/rosma/rosma_frames'
     detection_result_dir = '/home/mfatholl@na.jnj.com/share/data/score/rosma/detection_result'
+    video_path = '/home/mfatholl@na.jnj.com/share/data/score/rosma/rosma_videos'
     import glob
     vid_list = sorted(glob.glob(all_vid_fms+'/*'))
-
-    webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
-        ('rtsp://', 'rtmp://', 'http://', 'https://'))
+    webcam = False
+    # webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
+    #     ('rtsp://', 'rtmp://', 'http://', 'https://'))
 
     # Directories
 
@@ -80,47 +81,54 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
     check_suffix(w, suffixes)  # check weights have acceptable suffix
     pt, onnx, tflite, pb, saved_model = (suffix == x for x in suffixes)  # backend booleans
     stride, names = 64, [f'class{i}' for i in range(1000)]  # assign defaults
-    if pt:
-        model = torch.jit.load(w) if 'torchscript' in w else attempt_load(weights, map_location=device)
-        stride = int(model.stride.max())  # model stride
-        names = model.module.names if hasattr(model, 'module') else model.names  # get class names
-        if half:
-            model.half()  # to FP16
-        if classify:  # second-stage classifier
-            modelc = load_classifier(name='resnet50', n=2)  # initialize
-            modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
+    model = torch.jit.load(w) if 'torchscript' in w else attempt_load(weights, map_location=device)
+    stride = int(model.stride.max())  # model stride
+    names = model.module.names if hasattr(model, 'module') else model.names  # get class names
+    if half:
+        model.half()  # to FP16
+    if classify:  # second-stage classifier
+        modelc = load_classifier(name='resnet50', n=2)  # initialize
+        modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
     imgsz = check_img_size(imgsz, s=stride)  # check image size
-
-    # Dataloader
-    dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt)
-    bs = 1  # batch_size
-    vid_path, vid_writer = [None] * bs, [None] * bs
-
+    bs = 6  # batch_size
     # Run inference
     if pt and device.type != 'cpu':
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
     dt, seen = [0.0, 0.0, 0.0], 0
 
+    missing_det= ['X06_Pea_on_a_Peg_03','X05_Wire_Chaser_I_06','X04_Wire_Chaser_I_05', 'X04_Wire_Chaser_I_04', 'X04_Wire_Chaser_I_06', 'X05_Wire_Chaser_I_01', 'X05_Wire_Chaser_I_05']
+
+    vid_list=[os.path.join(all_vid_fms, a) for a in missing_det]
     for ss, source in enumerate(vid_list):
         name = 'exp_'
         print(source)
+
+        vid_path, vid_writer = [None] * bs, [None] * bs
+
         vid_name = source.split('/')[-1]
-        source = str(source)
-        save_img = not nosave and not source.endswith('.txt')  # save inference images
-        pickle_name = os.path.join( detection_result_dir, vid_name+'.pkl')
-        if os.path.exists(pickle_name):
-            print('already exists')
+        pickle_name = os.path.join(detection_result_dir, vid_name+'.pkl')
+        # if os.path.exists(pickle_name):
+        #     print('already exists')
+        #     continue
+        mp4_path =video_path+'/'+vid_name+'.mp4'
+        if not os.path.isfile(mp4_path):
+            print('video deos not exist')
             continue
+        dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt)
+        source = str(source)
         name+= vid_name
 
         save_dir = Path(project) / name
         # save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
-        if save_img:
-            (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
-
         all_detection = []
         for ii, out_dataset in enumerate(dataset):
             path, img, im0s, vid_cap = out_dataset
+            if ii< 5:
+                save_img = True
+            else:
+                save_img = False
+            if save_img:
+                (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
             t1 = time_sync()
             if onnx:
                 img = img.astype('float32')
@@ -134,36 +142,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             dt[0] += t2 - t1
 
             # Inference
-            if pt:
-                visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-                pred = model(img, augment=augment, visualize=visualize)[0]
-            elif onnx:
-                if dnn:
-                    net.setInput(img)
-                    pred = torch.tensor(net.forward())
-                else:
-                    pred = torch.tensor(session.run([session.get_outputs()[0].name], {session.get_inputs()[0].name: img}))
-            else:  # tensorflow model (tflite, pb, saved_model)
-                imn = img.permute(0, 2, 3, 1).cpu().numpy()  # image in numpy
-                if pb:
-                    pred = frozen_func(x=tf.constant(imn)).numpy()
-                elif saved_model:
-                    pred = model(imn, training=False).numpy()
-                elif tflite:
-                    if int8:
-                        scale, zero_point = input_details[0]['quantization']
-                        imn = (imn / scale + zero_point).astype(np.uint8)  # de-scale
-                    interpreter.set_tensor(input_details[0]['index'], imn)
-                    interpreter.invoke()
-                    pred = interpreter.get_tensor(output_details[0]['index'])
-                    if int8:
-                        scale, zero_point = output_details[0]['quantization']
-                        pred = (pred.astype(np.float32) - zero_point) * scale  # re-scale
-                pred[..., 0] *= imgsz[1]  # x
-                pred[..., 1] *= imgsz[0]  # y
-                pred[..., 2] *= imgsz[1]  # w
-                pred[..., 3] *= imgsz[0]  # h
-                pred = torch.tensor(pred)
+            visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+            pred = model(img, augment=augment, visualize=visualize)[0]
             t3 = time_sync()
             dt[1] += t3 - t2
 
@@ -243,14 +223,13 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                         vid_writer[i].write(im0)
             all_detection.append({'index':ii, 'img_path': path, 'detections':pred[0].cpu().numpy()})
         pickle.dump(all_detection, open(pickle_name, "wb"))
-        print(f'pickle_name:', pickle_name)
 
         # Print results
         t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
         # print(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}' % t)
         if save_txt or save_img:
             s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
-            print(f"Results saved to {colorstr('bold', save_dir)}{s}")
+            # print(f"Results saved to {colorstr('bold', save_dir)}{s}")
         if update:
             strip_optimizer(weights)  # update model (to fix SourceChangeWarning)
 
