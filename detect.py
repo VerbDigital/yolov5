@@ -7,7 +7,7 @@ Usage:
 """
 
 import argparse
-import os
+import os, pickle
 import sys
 from pathlib import Path
 
@@ -32,8 +32,8 @@ from utils.torch_utils import load_classifier, select_device, time_sync
 
 
 @torch.no_grad()
-def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
-        source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
+def run(weights=ROOT,  # model.pt path(s)
+        source='Non',  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
         conf_thres=0.25,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
@@ -60,6 +60,11 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         ):
     source = str(source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
+    base_dir = os.path.split(source)[0]
+    detection_result_dir = os.path.join(base_dir, 'detection')
+    vid_name = source.split('/')[-1]
+    pickle_name = os.path.join( detection_result_dir, vid_name+'.pkl')
+    name+= vid_name
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
         ('rtsp://', 'rtmp://', 'http://', 'https://'))
 
@@ -87,52 +92,22 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         if classify:  # second-stage classifier
             modelc = load_classifier(name='resnet50', n=2)  # initialize
             modelc.load_state_dict(torch.load('resnet50.pt', map_location=device)['model']).to(device).eval()
-    elif onnx:
-        if dnn:
-            check_requirements(('opencv-python>=4.5.4',))
-            net = cv2.dnn.readNetFromONNX(w)
-        else:
-            check_requirements(('onnx', 'onnxruntime-gpu' if torch.has_cuda else 'onnxruntime'))
-            import onnxruntime
-            session = onnxruntime.InferenceSession(w, None)
-    else:  # TensorFlow models
-        check_requirements(('tensorflow>=2.4.1',))
-        import tensorflow as tf
-        if pb:  # https://www.tensorflow.org/guide/migrate#a_graphpb_or_graphpbtxt
-            def wrap_frozen_graph(gd, inputs, outputs):
-                x = tf.compat.v1.wrap_function(lambda: tf.compat.v1.import_graph_def(gd, name=""), [])  # wrapped import
-                return x.prune(tf.nest.map_structure(x.graph.as_graph_element, inputs),
-                               tf.nest.map_structure(x.graph.as_graph_element, outputs))
-
-            graph_def = tf.Graph().as_graph_def()
-            graph_def.ParseFromString(open(w, 'rb').read())
-            frozen_func = wrap_frozen_graph(gd=graph_def, inputs="x:0", outputs="Identity:0")
-        elif saved_model:
-            model = tf.keras.models.load_model(w)
-        elif tflite:
-            interpreter = tf.lite.Interpreter(model_path=w)  # load TFLite model
-            interpreter.allocate_tensors()  # allocate
-            input_details = interpreter.get_input_details()  # inputs
-            output_details = interpreter.get_output_details()  # outputs
-            int8 = input_details[0]['dtype'] == np.uint8  # is TFLite quantized uint8 model
     imgsz = check_img_size(imgsz, s=stride)  # check image size
 
     # Dataloader
-    if webcam:
-        view_img = check_imshow()
-        cudnn.benchmark = True  # set True to speed up constant image size inference
-        dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt)
-        bs = len(dataset)  # batch_size
-    else:
-        dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt)
-        bs = 1  # batch_size
+    dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt)
+    bs = 1  # batch_size
     vid_path, vid_writer = [None] * bs, [None] * bs
 
     # Run inference
     if pt and device.type != 'cpu':
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
     dt, seen = [0.0, 0.0, 0.0], 0
-    for path, img, im0s, vid_cap in dataset:
+
+
+    all_detection = []
+    for ii, out_dataset in enumerate(dataset):
+        path, img, im0s, vid_cap = out_dataset
         t1 = time_sync()
         if onnx:
             img = img.astype('float32')
@@ -253,6 +228,9 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                             save_path += '.mp4'
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
+        all_detection.append({'index':ii, 'img_path': path, 'detections':pred[0].cpu().numpy()})
+    pickle.dump(all_detection, open(pickle_name, "wb"))
+    print(f'pickle_name:', pickle_name)
 
     # Print results
     t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
@@ -272,7 +250,7 @@ def parse_opt():
     parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
-    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--device', default=0, help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--view-img', action='store_true', help='show results')
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
     parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
