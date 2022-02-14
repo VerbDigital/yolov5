@@ -8,7 +8,7 @@ Usage:
 
 import argparse
 import os, pickle
-import sys
+import sys, glob
 from pathlib import Path
 
 import cv2
@@ -30,13 +30,13 @@ from utils.general import apply_classifier, check_img_size, check_imshow, check_
 from utils.plots import Annotator, colors
 from utils.torch_utils import load_classifier, select_device, time_sync
 
-# --weights runs/tower/exp/weights/best.pt  --agnostic --source /home/mfatholl@na.jnj.com/share/data/score/rosma_yolo/imerit/x11_pea_on_a_peg_03/images --nosave  --conf-thres 0.25 --iou-thres 0.1
+# --weights runs/tower/exp/weights/best.pt  --agnostic --source /home/mona/share/data/score/rosma_yolo/imerit/x11_pea_on_a_peg_03/images --nosave  --conf-thres 0.25 --iou-thres 0.1
 
 @torch.no_grad()
 def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
-        conf_thres=0.25,  # confidence threshold
+        conf_thres=0.7,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
         max_det=1000,  # maximum detections per image
         device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
@@ -59,17 +59,15 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         half=False,  # use FP16 half-precision inference
         dnn=False,  # use OpenCV DNN for ONNX inference
         ):
-    all_vid_fms = '/home/mfatholl@na.jnj.com/share/data/score/rosma/rosma_frames'
-    detection_result_dir = '/home/mfatholl@na.jnj.com/share/data/score/rosma/detection_result'
-    video_path = '/home/mfatholl@na.jnj.com/share/data/score/rosma/rosma_videos'
-    import glob
-    vid_list = sorted(glob.glob(all_vid_fms+'/*'))
+    base_dir = source
+    video_path= os.path.join(base_dir, 'clips')
+    frame_path = os.path.join(base_dir, 'frames')
+    vid_list = glob.glob(frame_path+'/*')
+    print(vid_list)
+    base_dir = os.path.split(video_path)[0]
+    detection_result_dir = os.path.join(base_dir, 'detection')
+    os.makedirs(detection_result_dir, exist_ok=True)
     webcam = False
-    # webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
-    #     ('rtsp://', 'rtmp://', 'http://', 'https://'))
-
-    # Directories
-
     # Initialize
     set_logging()
     device = select_device(device)
@@ -96,24 +94,23 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
     dt, seen = [0.0, 0.0, 0.0], 0
 
-    missing_det= ['X06_Pea_on_a_Peg_03','X05_Wire_Chaser_I_06','X04_Wire_Chaser_I_05', 'X04_Wire_Chaser_I_04', 'X04_Wire_Chaser_I_06', 'X05_Wire_Chaser_I_01', 'X05_Wire_Chaser_I_05']
-
-    vid_list=[os.path.join(all_vid_fms, a) for a in missing_det]
+    
     for ss, source in enumerate(vid_list):
         name = 'exp_'
-        print(source)
-
         vid_path, vid_writer = [None] * bs, [None] * bs
 
-        vid_name = source.split('/')[-1]
-        pickle_name = os.path.join(detection_result_dir, vid_name+'.pkl')
-        # if os.path.exists(pickle_name):
-        #     print('already exists')
+        vid_name = os.path.splitext(source.split('/')[-1])[0]
+        # mp4_path =video_path+'/'+vid_name+'.mp4'
+        # if not os.path.isfile(mp4_path):
+        #     print(f'video deos not exist{mp4_path}')
         #     continue
-        mp4_path =video_path+'/'+vid_name+'.mp4'
-        if not os.path.isfile(mp4_path):
-            print('video deos not exist')
-            continue
+        vid_name = vid_name.split('_')[0]
+        print('source:', vid_name)
+        pickle_name = os.path.join(detection_result_dir, vid_name+'.pkl')
+        if os.path.exists(pickle_name):
+             print('already exists')
+             continue
+
         dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt)
         source = str(source)
         name+= vid_name
@@ -121,12 +118,10 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         save_dir = Path(project) / name
         # save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
         all_detection = []
+        print('len-dataset:', len(dataset))
+        save_img = True
         for ii, out_dataset in enumerate(dataset):
             path, img, im0s, vid_cap = out_dataset
-            if ii< 5:
-                save_img = True
-            else:
-                save_img = False
             if save_img:
                 (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
             t1 = time_sync()
@@ -154,7 +149,6 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             # Second-stage classifier (optional)
             if classify:
                 pred = apply_classifier(pred, modelc, img, im0s)
-
             # Process predictions
             for i, det in enumerate(pred):  # per image
                 seen += 1
