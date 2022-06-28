@@ -800,8 +800,15 @@ def save_one_box(xyxy, im, file='image.jpg', gain=1.02, pad=10, square=False, BG
     xyxy = xywh2xyxy(b).long()
     clip_coords(xyxy, im.shape)
     crop = im[int(xyxy[0, 1]):int(xyxy[0, 3]), int(xyxy[0, 0]):int(xyxy[0, 2]), ::(1 if BGR else -1)]
-    if save:
-        cv2.imwrite(str(increment_path(file, mkdir=True).with_suffix('.jpg')), crop)
+    h_c, w_c = crop.shape[0:2]
+    if save and h_c >100 and w_c > 100:
+        margin = np.abs(w_c - h_c) // 2
+        if w_c > h_c:
+            crop = cv2.copyMakeBorder(crop, margin, margin, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        else:
+            crop = cv2.copyMakeBorder(crop, 0, 0, margin, margin, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        file.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(file), crop)
     return crop
 
 

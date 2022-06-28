@@ -31,12 +31,30 @@ from utils.plots import Annotator, colors
 from utils.torch_utils import load_classifier, select_device, time_sync
 
 # --weights runs/tower/exp/weights/best.pt  --agnostic --source /home/mona/share/data/score/rosma_yolo/imerit/x11_pea_on_a_peg_03/images --nosave  --conf-thres 0.25 --iou-thres 0.1
+def create_crop(img, bbox):
+    bbox = [int(b) for b in bbox]
+    gap = 0
+    h, w = img.shape[0:2]
+    bbox[0] = max(0, bbox[0] - gap)
+    bbox[1] = max(0, bbox[1] - gap)
+    bbox[2] = min(w, bbox[2] + gap)
+    bbox[3] = min(h, bbox[3] + gap)
+
+    crop = img[bbox[1] : bbox[3], bbox[0] : bbox[2], :]
+    h_c, w_c = crop.shape[0:2]
+    margin = np.abs(w_c - h_c) // 2
+    if w_c > h_c:
+        crop = cv2.copyMakeBorder(crop, margin, margin, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    else:
+        crop = cv2.copyMakeBorder(crop, 0, 0, margin, margin, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    return crop
+
 
 @torch.no_grad()
 def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
         imgsz=640,  # inference size (pixels)
-        conf_thres=0.7,  # confidence threshold
+        conf_thres=0.5,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
         max_det=1000,  # maximum detections per image
         device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
@@ -60,19 +78,25 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         dnn=False,  # use OpenCV DNN for ONNX inference
         ):
     base_dir = source
-    video_path= os.path.join(base_dir, 'clips')
-    frame_path = os.path.join(base_dir, 'frames')
-    vid_list = glob.glob(frame_path+'/*')
-    print(vid_list)
+    video_path= os.path.join(base_dir, 'clips_')
+
+    
     base_dir = os.path.split(video_path)[0]
-    detection_result_dir = os.path.join(base_dir, 'detection')
+    video_path = '/home/mfatholl@na.jnj.com/share/data/style_gan/s3/csats-limited'
+    vid_list = glob.glob(video_path+'/*')
+    detection_result_dir = os.path.join(os.path.dirname(video_path), 'csat_limited_detections')
+    detected_crop_dir = Path(os.path.join(detection_result_dir, 'crops'))
+    save_dir = Path(detection_result_dir)
+    #detection_result_dir'/home/mfatholl@na.jnj.com/share/data/style_gan/detections/crops'
+    os.makedirs(detected_crop_dir, exist_ok=True)
     os.makedirs(detection_result_dir, exist_ok=True)
     webcam = False
     # Initialize
     set_logging()
     device = select_device(device)
     half &= device.type != 'cpu'  # half precision only supported on CUDA
-
+    save_crop = True
+    save_img = False
     # Load model
     w = str(weights[0] if isinstance(weights, list) else weights)
     classify, suffix, suffixes = False, Path(w).suffix.lower(), ['.pt', '.onnx', '.tflite', '.pb', '']
@@ -100,13 +124,13 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         vid_path, vid_writer = [None] * bs, [None] * bs
 
         vid_name = os.path.splitext(source.split('/')[-1])[0]
-        # mp4_path =video_path+'/'+vid_name+'.mp4'
+        #vid_name = 'video_'+source.split('_')[-1]
         # if not os.path.isfile(mp4_path):
         #     print(f'video deos not exist{mp4_path}')
         #     continue
-        vid_name = vid_name.split('_')[0]
-        print('source:', vid_name)
+        vid_name = vid_name.split('_')[-1]
         pickle_name = os.path.join(detection_result_dir, vid_name+'.pkl')
+        print(pickle_name, source)
         if os.path.exists(pickle_name):
              print('already exists')
              continue
@@ -115,11 +139,9 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         source = str(source)
         name+= vid_name
 
-        save_dir = Path(project) / name
-        # save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
         all_detection = []
         print('len-dataset:', len(dataset))
-        save_img = True
+
         for ii, out_dataset in enumerate(dataset):
             path, img, im0s, vid_cap = out_dataset
             if save_img:
@@ -158,7 +180,9 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     p, s, im0, frame = path, '', im0s.copy(), getattr(dataset, 'frame', 0)
 
                 p = Path(p)  # to Path
-                save_path = str(save_dir / p.name)  # img.jpg
+                save_path = os.path.join(detected_crop_dir, f'vid_{vid_name}-{p.name}')
+
+                #save_path = str(save_dir / p.name)  # img.jpg
                 txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
                 s += '%gx%g ' % img.shape[2:]  # print string
                 gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
@@ -185,8 +209,11 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                             c = int(cls)  # integer class
                             label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
                             annotator.box_label(xyxy, label, color=colors(c, True))
+                            #save_dir = Path(project) / name
+                            # save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
+        
                             if save_crop:
-                                save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+                                save_one_box(xyxy, imc, file=detected_crop_dir / names[c] / f'video_{vid_name}-{p.stem}.jpg', BGR=True)
 
                 # Print time (inference-only)
                 # print(f'{s}Done. ({t3 - t2:.3f}s)')
@@ -233,7 +260,7 @@ def parse_opt():
     parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path(s)')
     parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
-    parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
+    parser.add_argument('--conf-thres', type=float, default=0.55, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
     parser.add_argument('--device', default=0, help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
